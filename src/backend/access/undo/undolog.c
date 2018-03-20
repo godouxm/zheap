@@ -136,9 +136,6 @@ struct
 	 */
 	UndoLogControl *logs[UndoPersistenceLevels];
 
-	/* The numbers of the attached undo logs. */
-	UndoLogNumber lognos[UndoPersistenceLevels];
-
 	/*
 	 * The address where each bank of control objects is mapped into memory in
 	 * this backend.  We map banks into memory on demand, and (for now) they
@@ -480,12 +477,10 @@ detach_current_undo_log(UndoPersistence persistence, bool exhausted)
 {
 	UndoLogSharedData *shared = MyUndoLogState.shared;
 	UndoLogControl *log = MyUndoLogState.logs[persistence];
-	UndoLogNumber logno = MyUndoLogState.lognos[persistence];
 
 	Assert(log != NULL);
 
 	MyUndoLogState.logs[persistence] = NULL;
-	MyUndoLogState.lognos[persistence] = InvalidUndoLogNumber;
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
 	prepare_to_modify_undo_log(log);
@@ -501,7 +496,7 @@ detach_current_undo_log(UndoPersistence persistence, bool exhausted)
 	{
 		LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 		log->next_free = shared->free_lists[persistence];
-		shared->free_lists[persistence] = logno;
+		shared->free_lists[persistence] = log->logno;
 		LWLockRelease(UndoLogLock);
 	}
 }
@@ -766,7 +761,7 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 		if (persistence == UNDO_PERMANENT)
 		{
 			xlrec.xid = GetTopTransactionId();
-			xlrec.logno = MyUndoLogState.lognos[persistence];
+			xlrec.logno = log->logno;
 			xlrec.insert = log->meta.insert;
 			xlrec.last_xact_start = log->meta.last_xact_start;
 			xlrec.is_first_rec = is_xid_change;
@@ -810,15 +805,14 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 		 * Extend the end of this undo log to cover new_insert (in other words
 		 * round up to the segment size).
 		 */
-		extend_undo_log(MyUndoLogState.lognos[persistence],
+		extend_undo_log(log->logno,
 						new_insert + UndoLogSegmentSize -
 						new_insert % UndoLogSegmentSize);
 		Assert(new_insert <= log->meta.end);
 	}
 
 
-	return MakeUndoRecPtr(MyUndoLogState.lognos[persistence],
-						  log->meta.insert);
+	return MakeUndoRecPtr(log->logno, log->meta.insert);
 }
 
 /*
@@ -906,7 +900,7 @@ UndoLogAdvance(UndoRecPtr insertion_point, size_t size, UndoPersistence persiste
 		: MyUndoLogState.logs[persistence];
 
 	Assert(log != NULL);
-	Assert(InRecovery || logno == MyUndoLogState.lognos[log->meta.persistence]);
+	Assert(InRecovery || logno == log->logno);
 	Assert(UndoRecPtrGetOffset(insertion_point) == log->meta.insert);
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
@@ -1720,7 +1714,6 @@ attach_undo_log(UndoPersistence persistence, Oid tablespace)
 	log->need_attach_wal_record = true;
 	LWLockRelease(&log->mutex);
 
-	MyUndoLogState.lognos[persistence] = logno;
 	MyUndoLogState.logs[persistence] = log;
 }
 
@@ -1892,7 +1885,6 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 		for (i = 0; i < UndoPersistenceLevels; ++i)
 		{
 			UndoLogControl *log = MyUndoLogState.logs[i];
-			UndoLogNumber logno = MyUndoLogState.lognos[i];
 			UndoLogSharedData *shared = MyUndoLogState.shared;
 
 			if (log != NULL)
@@ -1905,7 +1897,7 @@ choose_undo_tablespace(bool force_detach, Oid *tablespace)
 
 				LWLockAcquire(UndoLogLock, LW_EXCLUSIVE);
 				log->next_free = shared->free_lists[i];
-				shared->free_lists[i] = logno;
+				shared->free_lists[i] = log->logno;
 				LWLockRelease(UndoLogLock);
 
 				MyUndoLogState.logs[i] = NULL;
