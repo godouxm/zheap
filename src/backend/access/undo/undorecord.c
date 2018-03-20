@@ -782,7 +782,7 @@ PrepareUndoInsert(UnpackedUndoRecord *urec, UndoPersistence upersistence,
 		urecptr = UndoLogAllocate(size, upersistence);
 
 	log = UndoLogGet(UndoRecPtrGetLogNo(urecptr));
-	Assert(AmAttachedToUndoLog(log));
+	Assert(AmAttachedToUndoLog(log) || InRecovery);
 
 	/*
 	 * If transaction id is switched then update the previous transaction's

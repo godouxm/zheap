@@ -96,6 +96,7 @@ zheap_xlog_insert(XLogReaderState *record)
 	 * undo should be inserted at same location as it was during the actual
 	 * insert (DO operation).
 	 */
+
 	Assert (urecptr == xlundohdr->urec_ptr);
 
 	/*

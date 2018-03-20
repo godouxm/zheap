@@ -702,7 +702,6 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 {
 	UndoLogControl *log = MyUndoLogState.logs[persistence];
 	UndoLogOffset new_insert;
-	bool is_xid_change = false;
 
 	/*
 	 * We may need to attach to an undo log, either because this is the first
@@ -726,9 +725,6 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 			LWLockRelease(TablespaceCreateLock);
 		log = MyUndoLogState.logs[persistence];
 		MyUndoLogState.need_to_choose_tablespace = false;
-
-		/* Start of a new transaction */
-		is_xid_change = true;
 	}
 
 	/*
@@ -755,6 +751,7 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 		}
 		prepare_to_modify_undo_log(log);
 		log->meta.xid = GetTopTransactionId();
+		log->meta.is_first_rec = true;
 		LWLockRelease(&log->mutex);
 
 		/* Skip the attach record for unlogged and temporary tables. */
@@ -764,7 +761,7 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 			xlrec.logno = log->logno;
 			xlrec.insert = log->meta.insert;
 			xlrec.last_xact_start = log->meta.last_xact_start;
-			xlrec.is_first_rec = is_xid_change;
+			xlrec.is_first_rec = true;
 			xlrec.prevlen = log->meta.prevlen;
 
 			XLogBeginInsert();
@@ -810,7 +807,6 @@ UndoLogAllocate(size_t size, UndoPersistence persistence)
 						new_insert % UndoLogSegmentSize);
 		Assert(new_insert <= log->meta.end);
 	}
-
 
 	return MakeUndoRecPtr(log->logno, log->meta.insert);
 }
@@ -877,6 +873,7 @@ UndoLogAllocateInRecovery(TransactionId xid, size_t size,
 	 * it will not be first undo record for the transaction.
 	 */
 	log->meta.is_first_rec = false;
+
 	return MakeUndoRecPtr(logno, log->meta.insert);
 }
 
@@ -1710,7 +1707,7 @@ attach_undo_log(UndoPersistence persistence, Oid tablespace)
 
 	LWLockAcquire(&log->mutex, LW_EXCLUSIVE);
 	log->pid = MyProcPid;
-	log->meta.xid = GetTopTransactionId();
+	log->meta.xid = InvalidTransactionId;
 	log->need_attach_wal_record = true;
 	LWLockRelease(&log->mutex);
 
